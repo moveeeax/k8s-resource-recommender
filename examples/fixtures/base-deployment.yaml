@@ -1,0 +1,38 @@
+# A deliberately badly-sized Deployment: 2 cores requested for a container that
+# actually uses 0.2, and a 64Mi limit for one that actually needs ~200Mi.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: app
+          image: ghcr.io/example/api:1.4.2
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 2000m
+              memory: 64Mi
+            limits:
+              cpu: 4000m
+              memory: 64Mi
+        - name: envoy
+          image: envoyproxy/envoy:v1.31-latest
+          resources:
+            requests:
+              cpu: 500m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 256Mi

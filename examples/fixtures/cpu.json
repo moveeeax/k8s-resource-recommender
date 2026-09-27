@@ -1,0 +1,28 @@
+{
+  "status": "success",
+  "data": {
+    "resultType": "vector",
+    "result": [
+      {
+        "metric": {"namespace": "prod", "pod": "api-7d9f8b6c5d-aaaaa", "container": "app"},
+        "value": [1758900000, "0.2"]
+      },
+      {
+        "metric": {"namespace": "prod", "pod": "api-7d9f8b6c5d-bbbbb", "container": "app"},
+        "value": [1758900000, "0.18"]
+      },
+      {
+        "metric": {"namespace": "prod", "pod": "api-7d9f8b6c5d-aaaaa", "container": "envoy"},
+        "value": [1758900000, "0.012"]
+      },
+      {
+        "metric": {"namespace": "prod", "pod": "worker-6c4d9f8b5d-ccccc", "container": "app"},
+        "value": [1758900000, "1.4"]
+      },
+      {
+        "metric": {"namespace": "prod", "pod": "api-7d9f8b6c5d-aaaaa", "container": ""},
+        "value": [1758900000, "0.9"]
+      }
+    ]
+  }
+}

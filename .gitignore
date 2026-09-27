@@ -1,0 +1,20 @@
+# Built binary — anchored to the repo root so it never matches the
+# cmd/k8s-resource-recommender/ source directory.
+/k8s-resource-recommender
+/dist/
+
+# Go test and coverage artifacts
+/coverage.out
+/coverage.html
+*.test
+
+# Editor / OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Fixtures must always be tracked.
+!testdata/**
+!**/testdata/**
+!examples/fixtures/**
