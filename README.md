@@ -1,7 +1,7 @@
 # k8s-resource-recommender
 
 [![ci](https://github.com/moveeeax/k8s-resource-recommender/actions/workflows/ci.yml/badge.svg)](https://github.com/moveeeax/k8s-resource-recommender/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
+[![Go](https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/dl/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Point it at Prometheus, get a Kubernetes strategic-merge patch with requests and
