@@ -1,0 +1,40 @@
+{
+  "status": "success",
+  "data": {
+    "resultType": "vector",
+    "result": [
+      {
+        "metric": {"namespace": "prod", "pod": "api-7d9f8b6c5d-aaaaa", "container": "app", "resource": "cpu"},
+        "value": [1758900000, "2"]
+      },
+      {
+        "metric": {"namespace": "prod", "pod": "api-7d9f8b6c5d-aaaaa", "container": "app", "resource": "memory"},
+        "value": [1758900000, "67108864"]
+      },
+      {
+        "metric": {"namespace": "prod", "pod": "api-7d9f8b6c5d-aaaaa", "container": "envoy", "resource": "cpu"},
+        "value": [1758900000, "0.5"]
+      },
+      {
+        "metric": {"namespace": "prod", "pod": "api-7d9f8b6c5d-aaaaa", "container": "envoy", "resource": "memory"},
+        "value": [1758900000, "268435456"]
+      },
+      {
+        "metric": {"namespace": "prod", "pod": "api-7d9f8b6c5d-bbbbb", "container": "app", "resource": "cpu"},
+        "value": [1758900000, "2"]
+      },
+      {
+        "metric": {"namespace": "prod", "pod": "api-7d9f8b6c5d-bbbbb", "container": "app", "resource": "memory"},
+        "value": [1758900000, "67108864"]
+      },
+      {
+        "metric": {"namespace": "prod", "pod": "api-7d9f8b6c5d-bbbbb", "container": "envoy", "resource": "cpu"},
+        "value": [1758900000, "0.5"]
+      },
+      {
+        "metric": {"namespace": "prod", "pod": "api-7d9f8b6c5d-bbbbb", "container": "envoy", "resource": "memory"},
+        "value": [1758900000, "268435456"]
+      }
+    ]
+  }
+}

@@ -39,6 +39,12 @@ class Handler(BaseHTTPRequestHandler):
             payload = load("cpu.json")
         elif "container_memory_working_set_bytes" in query:
             payload = load("memory.json")
+        elif "kube_pod_container_resource_requests" in query:
+            payload = load("requests.json")
+        elif "kube_pod_container_resource_limits" in query:
+            payload = load("limits.json")
+        elif "kube_deployment_spec_replicas" in query:
+            payload = load("replicas.json")
         else:
             payload = json.dumps(
                 {"status": "error", "errorType": "bad_data", "error": f"unexpected query: {query}"}

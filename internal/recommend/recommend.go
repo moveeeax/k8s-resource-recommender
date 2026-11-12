@@ -30,6 +30,9 @@ type Options struct {
 	// CPUStepMilli / MemStepMi round requests up to a readable multiple.
 	CPUStepMilli int64
 	MemStepMi    int64
+	// OverFactor marks a container over-provisioned when its current request
+	// is more than this many times the recommendation.
+	OverFactor float64
 }
 
 // DefaultOptions are tuned so a container sitting at a steady 200m lands on a
@@ -43,6 +46,7 @@ func DefaultOptions() Options {
 		MinMemMi:       16,
 		CPUStepMilli:   10,
 		MemStepMi:      16,
+		OverFactor:     1.3,
 	}
 }
 
@@ -59,6 +63,8 @@ func (o Options) Validate() error {
 		return fmt.Errorf("cpu-step must be >= 1m, got %v", o.CPUStepMilli)
 	case o.MemStepMi < 1:
 		return fmt.Errorf("mem-step must be >= 1Mi, got %v", o.MemStepMi)
+	case o.OverFactor < 1:
+		return fmt.Errorf("over-factor must be >= 1, got %v", o.OverFactor)
 	}
 	return nil
 }
@@ -73,7 +79,43 @@ type Usage struct {
 	MemBytes float64
 	// Pods counts how many pods contributed to this row.
 	Pods int
+	// Current is what the workload runs with today, filled by ApplyCurrent.
+	Current Current
 }
+
+// Current holds the requests and limits a container runs with now, as
+// kube-state-metrics reports them. Zero means the value is not set (or the
+// metric is missing), which is how kube-state-metrics itself represents it:
+// it emits no series for an unset request.
+type Current struct {
+	// CPURequest / CPULimit are in cores, MemRequest / MemLimit in bytes.
+	CPURequest float64
+	CPULimit   float64
+	MemRequest float64
+	MemLimit   float64
+	// Pods counts the pods that report a request right now.
+	Pods int
+	// Replicas is the Deployment's spec.replicas, 0 when unknown.
+	Replicas int
+}
+
+// Status compares the current request with observed usage and the
+// recommendation.
+type Status string
+
+const (
+	// StatusUnset means no current request is known, so there is nothing to
+	// compare against.
+	StatusUnset Status = "unset"
+	// StatusUnder means observed usage is above the current request: the
+	// container is throttled or at OOM risk today.
+	StatusUnder Status = "under"
+	// StatusOver means the current request exceeds the recommendation by more
+	// than Options.OverFactor.
+	StatusOver Status = "over"
+	// StatusOK is everything in between.
+	StatusOK Status = "ok"
+)
 
 // Recommendation is the rounded result for one container.
 type Recommendation struct {
@@ -82,6 +124,7 @@ type Recommendation struct {
 	CPULimit   *resource.Quantity
 	MemRequest resource.Quantity
 	MemLimit   resource.Quantity
+	Status     Status
 }
 
 // podSuffix matches the "-<replicaset-hash>-<pod-hash>" tail that a Deployment
@@ -209,7 +252,153 @@ func For(u Usage, o Options) Recommendation {
 	memLim := roundUp(int64(math.Ceil(float64(memMi)*o.MemLimitFactor)), o.MemStepMi)
 	r.MemLimit = *resource.NewQuantity(memLim*(1<<20), resource.BinarySI)
 
+	r.Status = classify(r, o.OverFactor)
 	return r
+}
+
+// classify applies the rule ported from k8s-rightsize: under wins over over.
+// A container short on one resource is the urgent signal even when the other
+// resource looks slack, so it is never reported as reclaimable.
+func classify(r Recommendation, overFactor float64) Status {
+	c := r.Current
+	if c.CPURequest <= 0 && c.MemRequest <= 0 {
+		return StatusUnset
+	}
+	if (c.CPURequest > 0 && r.CPUCores > c.CPURequest) || (c.MemRequest > 0 && r.MemBytes > c.MemRequest) {
+		return StatusUnder
+	}
+	recCPU, recMem := CPUCores(r.CPURequest), float64(r.MemRequest.Value())
+	if (c.CPURequest > 0 && c.CPURequest > recCPU*overFactor) || (c.MemRequest > 0 && c.MemRequest > recMem*overFactor) {
+		return StatusOver
+	}
+	return StatusOK
+}
+
+// CPUCores converts a CPU quantity to cores.
+func CPUCores(q resource.Quantity) float64 {
+	return float64(q.MilliValue()) / 1000
+}
+
+// CurrentSeries is the raw kube-state-metrics data ApplyCurrent folds in. The
+// per-container maps are keyed by SeriesKey, Replicas by WorkloadKey.
+type CurrentSeries struct {
+	CPURequest map[string]float64
+	MemRequest map[string]float64
+	CPULimit   map[string]float64
+	MemLimit   map[string]float64
+	Replicas   map[string]float64
+}
+
+// WorkloadKey builds the map key for per-Deployment series such as
+// kube_deployment_spec_replicas.
+func WorkloadKey(namespace, deployment string) string {
+	return namespace + "\x00" + deployment
+}
+
+// ApplyCurrent fills Usage.Current from kube-state-metrics series, mapping
+// pods to Deployments the same way Aggregate does and taking the maximum
+// across replicas. During a rollout old and new pods can disagree; the larger
+// value is the one the scheduler still has to find room for.
+func ApplyCurrent(usages []Usage, s CurrentSeries) {
+	type acc struct {
+		cur  Current
+		pods map[string]struct{}
+	}
+	byKey := map[Key]*acc{}
+	fold := func(series map[string]float64, set func(*Current, float64), isRequest bool) {
+		for key, v := range series {
+			ns, pod, container, ok := parseSeries(key)
+			if !ok {
+				continue
+			}
+			k := Key{Namespace: ns, Deployment: DeploymentFromPod(pod), Container: container}
+			a := byKey[k]
+			if a == nil {
+				a = &acc{pods: map[string]struct{}{}}
+				byKey[k] = a
+			}
+			set(&a.cur, v)
+			if isRequest {
+				a.pods[pod] = struct{}{}
+			}
+		}
+	}
+	fold(s.CPURequest, func(c *Current, v float64) { c.CPURequest = math.Max(c.CPURequest, v) }, true)
+	fold(s.MemRequest, func(c *Current, v float64) { c.MemRequest = math.Max(c.MemRequest, v) }, true)
+	fold(s.CPULimit, func(c *Current, v float64) { c.CPULimit = math.Max(c.CPULimit, v) }, false)
+	fold(s.MemLimit, func(c *Current, v float64) { c.MemLimit = math.Max(c.MemLimit, v) }, false)
+
+	for i := range usages {
+		u := &usages[i]
+		if a := byKey[Key{Namespace: u.Namespace, Deployment: u.Deployment, Container: u.Container}]; a != nil {
+			u.Current = a.cur
+			u.Current.Pods = len(a.pods)
+		}
+		if n, ok := s.Replicas[WorkloadKey(u.Namespace, u.Deployment)]; ok && n > 0 {
+			u.Current.Replicas = int(n)
+		}
+	}
+}
+
+// Pricing converts reclaimable capacity into a monthly estimate. Zero values
+// disable the estimate for that resource.
+type Pricing struct {
+	CPUCoreMonth float64 // per requested core per month
+	MemGiBMonth  float64 // per requested GiB per month
+}
+
+// Summary is the reclaimable total across all over-provisioned containers.
+type Summary struct {
+	// Compared counts rows with a known current request; Over those of them
+	// with StatusOver.
+	Compared int `json:"compared"`
+	Over     int `json:"over"`
+	// CPUCores and MemBytes are request capacity freed by applying the
+	// recommendation to every replica of the over-provisioned containers.
+	CPUCores float64 `json:"reclaimableCpuCores"`
+	MemBytes float64 `json:"reclaimableMemoryBytes"`
+	// MonthlyCost is the estimate from Pricing, 0 when no price was given.
+	MonthlyCost float64 `json:"monthlyCost,omitempty"`
+}
+
+// Summarize totals what applying the recommendations would free. Only
+// over-provisioned containers count: an ok container's small surplus is
+// inside the headroom, and an under one needs more, not less.
+func Summarize(recs []Recommendation, p Pricing) Summary {
+	var s Summary
+	for _, r := range recs {
+		if r.Status == StatusUnset {
+			continue
+		}
+		s.Compared++
+		if r.Status != StatusOver {
+			continue
+		}
+		s.Over++
+		n := float64(replicas(r.Usage))
+		if d := r.Current.CPURequest - CPUCores(r.CPURequest); d > 0 {
+			s.CPUCores += d * n
+		}
+		if d := r.Current.MemRequest - float64(r.MemRequest.Value()); d > 0 {
+			s.MemBytes += d * n
+		}
+	}
+	s.MonthlyCost = s.CPUCores*p.CPUCoreMonth + s.MemBytes/(1<<30)*p.MemGiBMonth
+	return s
+}
+
+// replicas prefers spec.replicas, then the pods running now. The pod count
+// from the usage window is not used: it includes every pod a rollout or a
+// reschedule replaced during the window.
+func replicas(u Usage) int {
+	switch {
+	case u.Current.Replicas > 0:
+		return u.Current.Replicas
+	case u.Current.Pods > 0:
+		return u.Current.Pods
+	default:
+		return 1
+	}
 }
 
 // roundUp rounds v up to the next multiple of step.

@@ -1,0 +1,80 @@
+# Example GitHub Actions workflow for a GitOps repository: once a week, rewrite
+# the Deployment manifests under deploy/ from Prometheus usage and open a pull
+# request with the changes. Copy it to .github/workflows/ in the manifests repo
+# and adjust the env block.
+#
+# The runner has to reach Prometheus, so this assumes a self-hosted runner
+# inside the cluster network. Without that, run the tool elsewhere with
+# --save-queries, commit the saved responses, and point --from-dir at them.
+#
+# Pull requests opened with the default GITHUB_TOKEN do not trigger other
+# workflows (CI on the PR). Use a GitHub App token or a fine-grained PAT in
+# GH_TOKEN if the PR needs checks to run.
+name: rightsize
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  rightsize:
+    runs-on: [self-hosted]
+    env:
+      PROM_URL: http://prometheus-operated.monitoring:9090
+      NAMESPACE: prod
+      MANIFESTS: deploy
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Install k8s-resource-recommender
+        # Pin a release tag or commit instead of main in real use.
+        run: go install github.com/moveeeax/k8s-resource-recommender/cmd/k8s-resource-recommender@main
+
+      - name: Rewrite manifests
+        id: rewrite
+        run: |
+          set +e
+          k8s-resource-recommender \
+            --prom "$PROM_URL" \
+            --namespace "$NAMESPACE" \
+            --window 14d \
+            --write-manifests "$MANIFESTS" \
+            --min-change 0.1 > "$RUNNER_TEMP/table.md"
+          rc=$?
+          set -e
+          # 0: nothing to change, 3: manifests edited, anything else: failure.
+          case $rc in
+            0) echo "changed=false" >> "$GITHUB_OUTPUT" ;;
+            3) echo "changed=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$rc" ;;
+          esac
+
+      - name: Open a pull request
+        if: steps.rewrite.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="rightsize/$(date -u +%F)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "$MANIFESTS"
+          git commit -m "chore: right-size requests in $NAMESPACE"
+          git push --force-with-lease origin "$branch"
+          {
+            echo "Requests and limits recomputed from the last 14 days of Prometheus usage."
+            echo
+            cat "$RUNNER_TEMP/table.md"
+          } > "$RUNNER_TEMP/body.md"
+          gh pr create --base "${{ github.event.repository.default_branch }}" --head "$branch" \
+            --title "Right-size requests in $NAMESPACE ($(date -u +%F))" \
+            --body-file "$RUNNER_TEMP/body.md"

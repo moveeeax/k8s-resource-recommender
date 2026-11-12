@@ -9,6 +9,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/moveeeax/k8s-resource-recommender/internal/recommend"
+	"github.com/moveeeax/k8s-resource-recommender/internal/report"
 )
 
 // container is one entry of the patched container list. The `name` field is the
@@ -100,6 +101,11 @@ func Render(recs []recommend.Recommendation, quantile float64) (string, error) {
 
 		header += fmt.Sprintf("#   %s: %s cpu %.3f cores, %s memory %s across %d pod(s)\n",
 			r.Container, label, r.CPUCores, label, humanBytes(r.MemBytes), r.Pods)
+		if r.Current.CPURequest > 0 || r.Current.MemRequest > 0 {
+			header += fmt.Sprintf("#     current: requests cpu %s memory %s, limits cpu %s memory %s (%s)\n",
+				report.CPU(r.Current.CPURequest), report.Mem(r.Current.MemRequest),
+				report.CPU(r.Current.CPULimit), report.Mem(r.Current.MemLimit), r.Status)
+		}
 
 		current.Spec.Template.Spec.Containers = append(current.Spec.Template.Spec.Containers, container{
 			Name:      r.Container,
