@@ -211,3 +211,25 @@ func TestHumanBytes(t *testing.T) {
 		}
 	}
 }
+
+// The header shows what the container runs with today when kube-state-metrics
+// reported it, and says nothing when it did not.
+func TestRenderHeaderCurrentValues(t *testing.T) {
+	withCur := rec("prod", "api", "app", "250m", "500m", "256Mi", "256Mi")
+	withCur.Current = recommend.Current{CPURequest: 0.1, MemRequest: 128 << 20, MemLimit: 128 << 20}
+	withCur.Status = recommend.StatusUnder
+	without := rec("prod", "api", "sidecar", "10m", "20m", "16Mi", "16Mi")
+	without.Status = recommend.StatusUnset
+
+	got, err := Render([]recommend.Recommendation{withCur, without}, 0.95)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	want := "#     current: requests cpu 100m memory 128Mi, limits cpu - memory 128Mi (under)\n#   sidecar:"
+	if !strings.Contains(got, want) {
+		t.Errorf("output missing %q:\n%s", want, got)
+	}
+	if strings.Count(got, "current:") != 1 {
+		t.Errorf("want exactly one current line:\n%s", got)
+	}
+}

@@ -147,3 +147,34 @@ func TestNewTrimsTrailingSlash(t *testing.T) {
 		t.Errorf("BaseURL = %q, want the slash trimmed", got)
 	}
 }
+
+// QueryRaw hands back the body untouched, and Parse reads it the same way
+// Query does: that pair is what makes --save-queries / --from-dir replayable.
+func TestQueryRawRoundTrip(t *testing.T) {
+	const body = `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"pod":"a"},"value":[1,"0.5"]}]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, body)
+	}))
+	defer srv.Close()
+
+	raw, err := New(srv.URL, 5*time.Second).QueryRaw(context.Background(), "x")
+	if err != nil {
+		t.Fatalf("QueryRaw: %v", err)
+	}
+	if string(raw) != body {
+		t.Errorf("raw = %q, want the body verbatim", raw)
+	}
+	got, err := Parse(raw)
+	if err != nil || len(got) != 1 || got[0].Value != 0.5 {
+		t.Errorf("Parse = %+v, %v", got, err)
+	}
+}
+
+func TestParseRejectsGarbage(t *testing.T) {
+	if _, err := Parse([]byte("not json")); err == nil || !strings.Contains(err.Error(), "decode response") {
+		t.Errorf("err = %v, want a decode error", err)
+	}
+	if _, err := Parse([]byte(`{"status":"error","errorType":"bad_data","error":"boom"}`)); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("err = %v, want the Prometheus message", err)
+	}
+}

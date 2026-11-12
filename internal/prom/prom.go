@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -53,6 +54,22 @@ type apiResponse struct {
 
 // Query runs expr as an instant query and returns the resulting vector.
 func (c *Client) Query(ctx context.Context, expr string) ([]Sample, error) {
+	body, err := c.QueryRaw(ctx, expr)
+	if err != nil {
+		return nil, err
+	}
+	return Parse(body)
+}
+
+// maxBody caps how much of a response is read into memory. An instant vector
+// for a whole cluster is a few megabytes; anything past this is not a reply
+// the recommender can use.
+const maxBody = 64 << 20
+
+// QueryRaw runs expr as an instant query and returns the response body as
+// Prometheus sent it, so a run can be saved and replayed with Parse later.
+// HTTP-level failures are errors here; the envelope is checked by Parse.
+func (c *Client) QueryRaw(ctx context.Context, expr string) ([]byte, error) {
 	endpoint := c.BaseURL + "/api/v1/query"
 	form := url.Values{"query": []string{expr}}
 
@@ -69,15 +86,29 @@ func (c *Client) Query(ctx context.Context, expr string) ([]Sample, error) {
 	}
 	defer resp.Body.Close()
 
-	// Prometheus reports query errors as 400/422 with a JSON body, so decode
-	// first and only fall back to the status code when the body is unusable.
-	var out apiResponse
-	decErr := json.NewDecoder(resp.Body).Decode(&out)
-	if decErr != nil {
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("prometheus returned HTTP %d", resp.StatusCode)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	// Prometheus reports query errors as 400/422 with a JSON body, so try the
+	// envelope first and only fall back to the status code when it is unusable.
+	if resp.StatusCode != http.StatusOK {
+		var env apiResponse
+		if json.Unmarshal(body, &env) == nil && env.Status == "error" {
+			return nil, fmt.Errorf("prometheus error (%s): %s", env.ErrorType, env.Error)
 		}
-		return nil, fmt.Errorf("decode response: %w", decErr)
+		return nil, fmt.Errorf("prometheus returned HTTP %d", resp.StatusCode)
+	}
+	return body, nil
+}
+
+// Parse decodes an /api/v1/query response body into samples. It accepts the
+// same bytes QueryRaw returns, which is what makes saved runs replayable.
+func Parse(body []byte) ([]Sample, error) {
+	var out apiResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	if out.Status != "success" {
 		return nil, fmt.Errorf("prometheus error (%s): %s", out.ErrorType, out.Error)
